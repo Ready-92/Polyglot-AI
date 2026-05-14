@@ -3,6 +3,43 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// ==================== Cấu hình chung ====================
+const API_TIMEOUT = 30000; // 30s timeout mỗi request
+const MAX_RETRIES = 2;     // Thử lại tối đa 2 lần
+const RETRY_DELAY = 1000;  // Delay 1s giữa các lần retry
+
+/**
+ * fetch với timeout + retry
+ */
+const fetchWithRetry = async (url, options, retries = MAX_RETRIES) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const res = await fetch(url, { ...options, signal: controller.signal });
+            clearTimeout(timeoutId);
+            return res;
+        } catch (err) {
+            clearTimeout(timeoutId);
+            const isRetryable = attempt < retries && (
+                err.name === 'AbortError' ||
+                err.message?.includes('ENOTFOUND') ||
+                err.message?.includes('ECONNRESET') ||
+                err.message?.includes('ETIMEDOUT') ||
+                err.message?.includes('fetch failed') ||
+                err.type === 'system'
+            );
+            if (isRetryable) {
+                console.warn(`⚠️ Lỗi mạng (lần ${attempt + 1}/${retries}): ${err.message}. Thử lại...`);
+                await new Promise(r => setTimeout(r, RETRY_DELAY * (attempt + 1)));
+                continue;
+            }
+            throw err;
+        }
+    }
+};
+
 // ==================== DeepSeek Client (dùng cho text tasks) ====================
 const DEEPSEEK_BASE = 'https://api.deepseek.com/v1';
 const DEEPSEEK_MODEL = 'deepseek-chat';
@@ -11,7 +48,7 @@ const callDeepSeek = async (prompt) => {
     if (!process.env.DEEPSEEK_API_KEY) {
         throw new Error('Chưa cấu hình DEEPSEEK_API_KEY trong file .env');
     }
-    const res = await fetch(`${DEEPSEEK_BASE}/chat/completions`, {
+    const res = await fetchWithRetry(`${DEEPSEEK_BASE}/chat/completions`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
